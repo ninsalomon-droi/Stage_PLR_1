@@ -1,0 +1,15 @@
+[workspace]
+channels = ["conda-forge"]
+name = "Stage_Padova"
+platforms = ["win-64"]
+version = "0.1.0"
+
+[tasks]
+
+[dependencies]
+python = "3.12.9"
+numpy = ">=1.26"
+pandas = ">=3.0.6,<4"
+matplotlib = ">=3.11.2,<4"
+jupyter = ">=1.1.1,<2"
+scipy = ">=1.11"
