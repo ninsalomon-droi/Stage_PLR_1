@@ -3,6 +3,7 @@ from scipy.integrate import solve_ivp
 import matplotlib.pyplot as plt
 import copy
 import cvxpy as cvx #solver for convex optmimization problems
+from matplotlib.ticker import FuncFormatter, MaxNLocator, MultipleLocator
 
 
 params = {
@@ -23,6 +24,9 @@ params = {
     "deltam_mean": 0,
     "deltam_std_dev": 0,
 }
+
+def log_formatter(x, pos):
+    return f'$10^{{{int(x)}}}$'
 
 def generate_model_params(num_species, num_resources, C_mean, C_std_dev, rho, Q_mean, Q_std_dev, Q_rho, m_mean, m_std_dev, K_mean, K_std_dev):
     """
@@ -76,12 +80,13 @@ def MCRM_simulator(initial_state, num_species, C, m, E, K, Q, max_time=50000, st
     """
     ode_function = lambda t, state: MCRM_model(t, num_species, C, m, E, K, Q, state)
     
-    def check_steady_state(t, y): #Creation of an event to find the steady state
+    def check_steady_state(t, y):
         derivatives = ode_function(t, y)
-
-        #While derivatives are above a threshold --> steady state not found, check_steady_state.terminal = False = True
-        # ==> continue simulation
-        return np.max(np.abs(derivatives)/y) > steady_state_threshold
+        mask = y > 1e-12  # ignore extinct species/resources
+        if not np.any(mask):
+            return 0.0  # everything extinct: stop
+        relative_change = np.max(np.abs(derivatives[mask]) / y[mask])
+        return relative_change - steady_state_threshold
 
     # Integrate until steady state (check_steady_state.terminal = False) or max_time is reached
     check_steady_state.terminal = True
@@ -296,11 +301,50 @@ def predict_CRM_with_LV(Cs,Es,Qs,oldNs,oldRs,ms,K,E_I, C_I, m_I, delta_m, num_it
 
     return np.concatenate((native_N_prediction,invader_N_prediction)), native_R_prediction
 
+def plot_rel_error_inset(ax, pred, sim, color, q=1):
+    err = np.abs((pred - sim) / sim)
+    err = err[np.isfinite(err) & (err > 0)]
+    log_err = np.log10(err)
+    lo, hi = np.percentile(log_err, [q, 100 - q])
+    inset = ax.inset_axes([0.62, 0.2, 0.3, 0.25]) # position on x axis, position on y axis, width, height
+    inset.hist(log_err, bins=30, range=(lo, hi), color=color, edgecolor='none')
+    inset.set_xlabel('Relative Error', fontsize=8)
+    inset.set_ylabel('Frequency', fontsize=8)
+    inset.xaxis.set_major_locator(MultipleLocator(4))
+    inset.xaxis.set_major_formatter(FuncFormatter(log_formatter))
+    inset.tick_params(axis='both', which='major', labelsize=8)
+    return inset
 
 
+def plot_prediction_vs_sim(Predictions_I, Simulations_I, Predictions_N, Simulations_N, Predictions_R, Simulations_R):
 
+    plt.figure(figsize=(16, 4))
+    
+    ax1 = plt.subplot(1, 3, 1)
+    plt.scatter(Predictions_I, Simulations_I, s=5, alpha=0.3, c='darkgreen', edgecolors='black')
+    plt.axline((0, 0), slope=1, linestyle='--', color='r')
+    plt.xlabel("Predictions")
+    plt.ylabel("Simulations")
+    plt.title("Invader Abundance")
+    plot_rel_error_inset(ax1, np.array(Predictions_I), np.array(Simulations_I), 'darkgreen')
 
+    ax2 = plt.subplot(1, 3, 2)
+    plt.scatter(Predictions_N, Simulations_N, s=5, alpha=0.3, c='dodgerblue', edgecolors='black')
+    plt.axline((0, 0), slope=1, linestyle='--', color='r')
+    plt.xlabel("Predictions")
+    plt.ylabel("Simulations")
+    plt.title("Surviving species abundances")
+    plot_rel_error_inset(ax2, np.array(Predictions_N), np.array(Simulations_N), 'dodgerblue')
 
+    ax3 = plt.subplot(1, 3, 3)
+    plt.scatter(Predictions_R, Simulations_R, s=5, alpha=0.3, c='darkorange', edgecolors='black')
+    plt.axline((0, 0), slope=1, linestyle='--', color='r')
+    plt.xlabel("Predictions")
+    plt.ylabel("Simulations")
+    plt.title("Surviving resources abundances")
+    plot_rel_error_inset(ax3, np.array(Predictions_R), np.array(Simulations_R), 'darkorange')
+
+    plt.savefig("pred_vs_sim_MCRM.pdf") 
 
 def simulate_predict_multiple_systems(params, num_systems):
     np.random.seed(None)
@@ -450,7 +494,7 @@ Predictions_R = []
 Simulations_R = []
 Simulations_I = []
 Predictions_I = []
-results = simulate_predict_multiple_systems(params=params, num_systems=640)
+results = simulate_predict_multiple_systems(params=params, num_systems=50)
 
 for system in results:
     if (system["prediction_Nbool"][-1]) and (system["sim_Nbools"][-1]):
@@ -466,28 +510,4 @@ for system in results:
 
 #print(len(Predictions_I))
 
-plt.figure(figsize=(16, 4))
-plt.subplot(1, 3, 1)
-plt.scatter(Predictions_I, Simulations_I, s=5, alpha=0.3, c='darkgreen', edgecolors='black')
-plt.plot([0, 10], [0, 10], '--', color = 'r')
-plt.xlabel("Predictions")
-plt.ylabel("Simulations")
-plt.title("Invader Abundance")
-
-
-
-plt.subplot(1, 3, 2)
-plt.scatter(Predictions_N, Simulations_N, s=5, alpha=0.3, c='dodgerblue', edgecolors='black')
-plt.plot([0, 10], [0, 10], '--', color = 'r')
-plt.xlabel("Predictions")
-plt.ylabel("Simulations")
-plt.title("Surviving species abundances")
-
-plt.subplot(1, 3, 3)
-plt.scatter(Predictions_R, Simulations_R, s=5, alpha=0.3, c='darkorange', edgecolors='black')
-plt.plot([0, 10], [0, 10], '--', color = 'r')
-plt.xlabel("Predictions")
-plt.ylabel("Simulations")
-plt.title("Surviving resources abundances")
-
-plt.savefig(f"general_MCRM_redo.pdf")
+plot_prediction_vs_sim(Predictions_I, Simulations_I, Predictions_N, Simulations_N, Predictions_R, Simulations_R)
