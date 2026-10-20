@@ -98,7 +98,55 @@ def MCRM_simulator(initial_state, num_species, C, m, E, K, Q, max_time=50000, st
 
     return sol
 
-# a priori ne sert à rien
+# solve the system by a convex equivalent problem
+def find_steady_state(k, C, E, Q, u, max_iteration=100000, alpha=0.9, tol=1e-8):
+    keff = k.copy()
+    Q_S, Q_A = decompose_matrix(Q)
+    Delta = 1
+    iteration = 0
+    ncyc= 0 #number of cycles
+    Delta_old = 0
+    
+    resources=len(k)
+        
+    while Delta > tol and iteration < max_iteration:
+        #try:
+        R_opt = cvx.Variable(resources)
+        constraints = [C @ R_opt <= u, R_opt >= 0]
+        prob = cvx.Problem(cvx.Minimize((1/2)*cvx.quad_form(R_opt, Q_S) - keff.T @ R_opt), constraints)
+        prob_output = prob.solve(solver=cvx.OSQP, eps_abs=1e-8, eps_rel=1e-8, max_iter=100000, verbose=False,polish=True)
+
+        N_values = prob.constraints[0].dual_value
+        R_values = R_opt.value
+        deltak = k + (C.T - E.T) @ N_values - Q_A@ R_values - keff
+        keff += alpha * deltak
+
+        Delta_next = abs(np.max(k - Q@R_values - E.T @ N_values))
+
+        if np.isfinite(Delta) and Delta > tol and np.abs(Delta-Delta_old) < 0.1*tol: 
+                ncyc+=1 #check if the different
+
+        Delta_old = Delta
+        Delta = Delta_next
+        iteration += 1
+       # except:
+       #     keff=keff+np.random.uniform(-1,1)*len(keff)
+       #     print('optimizatino error')
+                    
+                    
+ 
+        #if ncyc > 10:
+        #    print('Limit cycle detected')
+        #    keff=keff+np.random.uniform(-1,1)*len(keff)
+        #    ncyc = 0
+
+    if iteration == max_iteration:
+        print('Delta = ',Delta,'Maximum iterations exceeded. Optimization failed. Returned inaccurate result')
+        return N_values, R_values
+    else:
+        return N_values, R_values
+
+
 def decompose_matrix(Q):
     # Ensure A is a numpy array
     Q = np.array(Q)
@@ -183,6 +231,36 @@ def update_ext_bool(original, shift, survival_threshold): #bring those shifting 
     original_plus_shift = original + shift
     Extbool = original_plus_shift <= survival_threshold
     return Extbool
+
+def plot_confusion_inset(ax, predictions, simulations, threshold, loc=(0.07, 0.60, 0.3, 0.3)):
+    predictions = np.asarray(predictions)
+    simulations = np.asarray(simulations)
+
+    pred_sur = predictions > threshold
+    sim_sur = simulations > threshold
+
+    # lignes = simulation (vrai), colonnes = prédiction
+    cm = np.array([
+        [np.sum(~sim_sur & ~pred_sur), np.sum(~sim_sur & pred_sur)],
+        [np.sum(sim_sur & ~pred_sur),  np.sum(sim_sur & pred_sur)],
+    ])
+
+    ins = ax.inset_axes(loc)
+    ins.imshow(cm, cmap='Blues')
+
+    for i in range(2):
+        for j in range(2):
+            color = 'white' if cm[i, j] > cm.max() / 2 else 'navy'
+            ins.text(j, i, cm[i, j], ha='center', va='center',
+                     color=color, fontsize=8)
+
+    ins.set_xticks([0, 1])
+    ins.set_yticks([0, 1])
+    ins.set_xticklabels(['Ext', 'Sur'], fontsize=7)
+    ins.set_yticklabels(['Ext', 'Sur'], fontsize=7)
+    #ins.set_xlabel('Prediction', fontsize=7)
+    #ins.set_ylabel('Simulation', fontsize=7)
+    return cm
 
 def general_perturbation_prediction(A,X,r,delta_r, knock_off, A_II,A_IS,A_SI, r_I, num_iters, momentum=0.1,survival_threshold=1e-5,A_IS_eff=None):
     #A_IS_eff is relevant only for nonlinear consumer dynamics, in that case A_IS is the effective interaction appear in invasion fitness, and A_IS_eff is the linearied interaction. In other cases, they are the same.
@@ -316,35 +394,39 @@ def plot_rel_error_inset(ax, pred, sim, color, q=1):
     return inset
 
 
-def plot_prediction_vs_sim(Predictions_I, Simulations_I, Predictions_N, Simulations_N, Predictions_R, Simulations_R):
-
+def plot_prediction_vs_sim(Predictions_I, Simulations_I,
+                           Predictions_N, Simulations_N,
+                           Predictions_R, Simulations_R,
+                           N_threshold, R_threshold,
+                           All_I=None, All_N=None, All_R=None):
+    # All_X = (pred_all, sim_all)
     plt.figure(figsize=(16, 4))
-    
+
     ax1 = plt.subplot(1, 3, 1)
     plt.scatter(Predictions_I, Simulations_I, s=5, alpha=0.3, c='darkgreen', edgecolors='black')
     plt.axline((0, 0), slope=1, linestyle='--', color='r')
-    plt.xlabel("Predictions")
-    plt.ylabel("Simulations")
+    plt.xlabel("Predictions"); plt.ylabel("Simulations")
     plt.title("Invader Abundance")
     plot_rel_error_inset(ax1, np.array(Predictions_I), np.array(Simulations_I), 'darkgreen')
+    plot_confusion_inset(ax1, *All_I, threshold=N_threshold)
 
     ax2 = plt.subplot(1, 3, 2)
     plt.scatter(Predictions_N, Simulations_N, s=5, alpha=0.3, c='dodgerblue', edgecolors='black')
     plt.axline((0, 0), slope=1, linestyle='--', color='r')
-    plt.xlabel("Predictions")
-    plt.ylabel("Simulations")
+    plt.xlabel("Predictions"); plt.ylabel("Simulations")
     plt.title("Surviving species abundances")
     plot_rel_error_inset(ax2, np.array(Predictions_N), np.array(Simulations_N), 'dodgerblue')
+    plot_confusion_inset(ax2, *All_N, threshold=N_threshold)
 
     ax3 = plt.subplot(1, 3, 3)
     plt.scatter(Predictions_R, Simulations_R, s=5, alpha=0.3, c='darkorange', edgecolors='black')
     plt.axline((0, 0), slope=1, linestyle='--', color='r')
-    plt.xlabel("Predictions")
-    plt.ylabel("Simulations")
+    plt.xlabel("Predictions"); plt.ylabel("Simulations")
     plt.title("Surviving resources abundances")
     plot_rel_error_inset(ax3, np.array(Predictions_R), np.array(Simulations_R), 'darkorange')
+    plot_confusion_inset(ax3, *All_R, threshold=R_threshold)
 
-    plt.savefig("pred_vs_sim_MCRM.pdf") 
+    plt.savefig("pred_vs_sim_MCRM.pdf")
 
 def simulate_predict_multiple_systems(params, num_systems):
     np.random.seed(None)
@@ -391,8 +473,9 @@ def simulate_predict_multiple_systems(params, num_systems):
 
 
         # Simulate the initial system
-        sol = MCRM_simulator(initial_state=initial_state,num_species=num_species,C=C,m=m,E=E,Q=Q,K=K,max_time=max_time)
-        oldN, oldR = sol.y[:num_species].T[-1], sol.y[num_species:].T[-1]
+        #sol = MCRM_simulator(initial_state=initial_state,num_species=num_species,C=C,m=m,E=E,Q=Q,K=K,max_time=max_time)
+        #oldN, oldR = sol.y[:num_species].T[-1], sol.y[num_species:].T[-1]
+        oldN, oldR = find_steady_state(K, C, E, Q, m, max_iteration=1000, alpha=0.1, tol=1e-7)
 
         
         # Determine extinction thresholds
@@ -445,9 +528,10 @@ def simulate_predict_multiple_systems(params, num_systems):
 
     
 
-        new_initial_state = np.random.rand(new_num_species + num_resources_s)
-        new_sol = MCRM_simulator(initial_state=new_initial_state,num_species=new_num_species,C=C_new,m=m_new,E=E_new,Q=Qs,K=Ks,max_time=1000)
-        newN, newR = new_sol.y[:new_num_species].T[-1], new_sol.y[new_num_species:].T[-1]
+        #new_initial_state = np.random.rand(new_num_species + num_resources_s)
+        #new_sol = MCRM_simulator(initial_state=new_initial_state,num_species=new_num_species,C=C_new,m=m_new,E=E_new,Q=Qs,K=Ks,max_time=1000)
+        #newN, newR = new_sol.y[:new_num_species].T[-1], new_sol.y[new_num_species:].T[-1]
+        newN, newR = find_steady_state(Ks, C_new, E_new, Qs, m_new, max_iteration=1000, alpha=0.1, tol=1e-7)
 
         N_simulator_Sbool = [(x > N_threshold) for x in newN]
         R_simulator_Sbool = [(x > R_threshold) for x in newR]
@@ -494,20 +578,45 @@ Predictions_R = []
 Simulations_R = []
 Simulations_I = []
 Predictions_I = []
-results = simulate_predict_multiple_systems(params=params, num_systems=50)
+
+# Pour la matrice de confusion (tout)
+All_Pred_N, All_Sim_N = [], []
+All_Pred_R, All_Sim_R = [], []
+All_Pred_I, All_Sim_I = [], []
+
+results = simulate_predict_multiple_systems(params=params, num_systems=640)
 
 for system in results:
+    
+    All_Pred_I.append(system["predictionNs"][-1])
+    All_Sim_I.append(system["simulationN_after"][-1])
     if (system["prediction_Nbool"][-1]) and (system["sim_Nbools"][-1]):
         Predictions_I.append(system["predictionNs"][-1])
         Simulations_I.append(system["simulationN_after"][-1])
+
     for i in range(len(system["prediction_Nbool"])-1):
+        All_Pred_N.append(system["predictionNs"][i])
+        All_Sim_N.append(system["simulationN_after"][i])
         if system["prediction_Nbool"][i] and system["sim_Nbools"][i]:
             Predictions_N.append(system["predictionNs"][i])
             Simulations_N.append(system["simulationN_after"][i])
+
+    for i in range(len(system["prediction_Rbool"])):
+        All_Pred_R.append(system["predictionRs"][i])
+        All_Sim_R.append(system["simulationR_after"][i])
         if system["prediction_Rbool"][i] and system["sim_Rbools"][i]:
             Predictions_R.append(system["predictionRs"][i])
             Simulations_R.append(system["simulationR_after"][i])
 
 #print(len(Predictions_I))
 
-plot_prediction_vs_sim(Predictions_I, Simulations_I, Predictions_N, Simulations_N, Predictions_R, Simulations_R)
+N_threshold = params.get('N_threshold', 1e-3)
+R_threshold = params.get('R_threshold', 1e-9)
+
+plot_prediction_vs_sim(Predictions_I, Simulations_I,
+                       Predictions_N, Simulations_N,
+                       Predictions_R, Simulations_R,
+                       N_threshold, R_threshold,
+                       All_I=(All_Pred_I, All_Sim_I),
+                       All_N=(All_Pred_N, All_Sim_N),
+                       All_R=(All_Pred_R, All_Sim_R))
