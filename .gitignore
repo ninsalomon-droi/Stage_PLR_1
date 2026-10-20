@@ -1,0 +1,7 @@
+.pixi/*
+!.pixi/config.toml
+__pycache__/
+*.pyc
+*.pdf
+*.json
+*.npy
