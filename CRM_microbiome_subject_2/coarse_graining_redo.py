@@ -87,8 +87,8 @@ def plot_pathway_fraction_evolution(out_dir, num_resources, group_size):
     pathway_array = create_pathways_array(functional_list)
     pathways_fraction_evolution = get_pathways_fraction_evolution(B_array, P_tensor, pathway_array, functional_list)
     
-    fig, ax = plt.subplots(figsize=(10, 8))
-    ax.stackplot(t_array, pathways_fraction_evolution)
+    fig, ax = plt.subplots(figsize=(10, 7))
+    ax.stackplot(t_array, pathways_fraction_evolution.T)
 
     ax.set_xlim(t_array[0], t_array[-1])
     ax.set_ylim(0, 1)
@@ -116,12 +116,12 @@ def plot_species_fraction_evolution(out_dir):
 
 
 num_resources = 30
-group_size = 1
+group_size = 7
 plot_type = "pathway"
 
-out_dir = Path("results/linear/fig2B_redo_seed=2791923_time=100years_g_coef=6")
+out_dir = Path("results/linear/fig2B_redo_seed=1513552_time=100years_g_coef=6")
 
-if __name__ == "main":
+if __name__ == "__main__":
 
     if plot_type == "pathway":
         plot_pathway_fraction_evolution(out_dir, num_resources, group_size)
