@@ -466,10 +466,10 @@ params = {
     "invasion_period": 1.5,
     "sample_freq": 7*24,
     "seed": 22749,
-    "g_coef": 6,
-    "g_exp": 1.1,
-    "g_num" : 8,
-    "g_func": "linear"
+    "g_coef": 0.5,
+    "g_exp": 1,
+    "g_num" : 1,
+    "g_func": "exponential"
 }
 
 

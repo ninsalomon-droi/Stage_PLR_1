@@ -3,7 +3,6 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 
 
-
 def load_data(out_dir):
     B_array = np.load(out_dir/"B_data.npy")
     S_array = np.load(out_dir/"S_data.npy")

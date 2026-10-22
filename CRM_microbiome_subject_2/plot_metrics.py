@@ -41,7 +41,13 @@ def shannon_index(B_array_relative):
     return Shannon_index
 
     
+def number_enzymes(B_array, P_tensor, E_mat):
+    Num_enzymes = np.zeros(len(B_array))
+    for time_point in range(len(B_array)):
+        print(100*time_point/len(B_array), "%")
+        Num_enzymes[time_point] = np.sum((B_array[time_point] > 0)*np.sum(E_mat[None, :, :] * P_tensor[:-1] , axis=(1,2)), axis=0)
 
+    return Num_enzymes
 
 
 def number_substances(S_array):
@@ -93,23 +99,47 @@ def plot_shannon_index(out_dir):
     B_array_relative = relative_abundance(B_array)
     Shannon_index = shannon_index(B_array_relative)
 
-    fig, ax = plt.subplots(figsize=(10, 8))
+    fig, ax = plt.subplots(figsize=(10, 6))
     ax.plot(t_array, Shannon_index, color='grey')
     ax.set_xlabel("Time")
     ax.set_ylabel("Shannon index")
+    ax.set_xlim(1000, t_array[-1])
+    ax.set_ylim(0.7, 3.3)
+    ax.tick_params(axis='x', labelsize=20)
+    ax.tick_params(axis='y', labelsize=20)  
 
     plt.savefig(out_dir/"plot_shannon_index.pdf")
 
+
+def plot_num_enzymes(out_dir):
+
+    B_array, S_array, P_tensor, t_array = load_data(out_dir)
+    E_mat = construct_E_mat(num_resources=len(S_array[0]))
+    Num_enzymes = number_enzymes(B_array, P_tensor, E_mat)
+
+    fig, ax = plt.subplots(figsize=(10, 6))
+    ax.plot(t_array, Num_enzymes, color='grey')
+    ax.set_xlabel("Time")
+    ax.set_ylabel("# enzymes")
+    ax.set_xlim(1000, t_array[-1])
+    ax.set_ylim(0, 175)
+    ax.tick_params(axis='x', labelsize=20)
+    ax.tick_params(axis='y', labelsize=20)  
+    plt.savefig(out_dir/"plot_num_enzymes.pdf")
 
 def plot_num_substances(out_dir):
 
     B_array, S_array, P_tensor, t_array = load_data(out_dir)
     Num_substances = number_substances(S_array)
 
-    fig, ax = plt.subplots(figsize=(10, 8))
+    fig, ax = plt.subplots(figsize=(10, 6))
     ax.plot(t_array, Num_substances, color='grey')
     ax.set_xlabel("Time")
     ax.set_ylabel("# substances")
+    ax.set_xlim(1000, t_array[-1])
+    ax.set_ylim(15.7, 30.9)
+    ax.tick_params(axis='x', labelsize=20)
+    ax.tick_params(axis='y', labelsize=20)  
 
     plt.savefig(out_dir/"plot_num_substances.pdf")
 
@@ -267,8 +297,8 @@ def plot_density_probability_metric(Dir, metric):
 
 
 
-plot_types = ["rescaled_log_average_abundance_distribution" ]
-out_dir = Path("results/linear/fig2B_redo_seed=6728720_time=50years_g_coef=6")
+plot_types = ["num_enzymes", "shannon_index", "num_substances" ]
+out_dir = Path("results/linear/fig2B_redo_seed=1513552_time=100years_g_coef=6")
 Dir = Path("results/linear")
 
 if __name__ == "__main__":
@@ -276,6 +306,10 @@ if __name__ == "__main__":
     if "shannon_index" in plot_types:
         print("-------- Shannon index --------")
         plot_shannon_index(out_dir)
+
+    if "num_enzymes" in plot_types:
+        print("-------- Num enzymes --------")
+        plot_num_enzymes(out_dir)
 
     if "num_substances" in plot_types:
         print("-------- Num substances --------")
