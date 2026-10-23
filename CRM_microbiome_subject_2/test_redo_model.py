@@ -40,6 +40,36 @@ def construct_P_tensor_init(num_bact, num_resources, first_pathway_index):
     return P_tensor
 
 
+def construct_P_mat(E_mat, max_pathways, num_resources):
+    """
+    Constructs P matrix for invader
+    """ 
+    P_mat = np.zeros((num_resources, num_resources))
+
+    num_pathways = np.random.randint(1, max_pathways)
+
+    
+    candidate_pathways = np.flatnonzero(E_mat > 0)
+    if num_pathways > candidate_pathways.size:
+        raise ValueError(f"num_pathways={num_pathways} > nombre de E_alpha_beta > 0 ({candidate_pathways.size})")
+    chosen = np.random.choice(candidate_pathways, size=num_pathways, replace=False)
+    P_mat.flat[chosen] = 1
+
+    return normalize(P_mat, axis=1, norm='l1')
+
+
+def construct_P_tensor(num_bact, num_resources, E_mat, max_pathways):
+    """
+    Construction of a P tensor for initial state, with only one pathway
+    for the first bacteria, from resource zero to resource with index = first
+    pathway index
+    """
+    P_tensor = np.zeros((num_bact, num_resources, num_resources))
+    for i in range(num_bact):
+        P_tensor[i] = construct_P_mat(E_mat, max_pathways, num_resources)
+    return P_tensor
+
+
 def construct_gamma_ivec(gamma, g_coef, g_exp, g_num, g_func, E_mat, P_tensor):
     """
     Construction of the gamma_i_vec vector using the Monod tradeoff
@@ -160,7 +190,6 @@ def gut_CRM_simulator(initial_state, num_bact, h_alpha_vec, delta, gamma_ivec, r
             gut_crm, (t_init, max_time), initial_state,
             method='BDF', rtol=rtol, atol=atol,
             jac=jac, jac_sparsity=jac_sparsity,
-            t_eval=[max_time], # Keep only the final state
         )
 
         y_end = np.array(sol.y)[:, -1]
@@ -171,7 +200,7 @@ def gut_CRM_simulator(initial_state, num_bact, h_alpha_vec, delta, gamma_ivec, r
             continue
 
         y_end = np.where(y_end < 1e-15, 0.0, y_end) # remove negative noise and very small values
-        return y_end[:num_bact], y_end[num_bact:]
+        return y_end[:num_bact], y_end[num_bact:], sol
 
     raise RuntimeError("gut_CRM_simulator : aucune tolérance n'a donné une solution valide.")
 
@@ -181,22 +210,7 @@ def gut_CRM_simulator(initial_state, num_bact, h_alpha_vec, delta, gamma_ivec, r
 #  FUNCTIONS FOR INVASION
 ##########################
 
-def construct_P_mat_invader(E_mat, max_pathways, num_resources):
-    """
-    Constructs P matrix for invader
-    """ 
-    P_mat = np.zeros((num_resources, num_resources))
 
-    num_pathways = np.random.randint(1, max_pathways)
-
-    
-    candidate_pathways = np.flatnonzero(E_mat > 0)
-    if num_pathways > candidate_pathways.size:
-        raise ValueError(f"num_pathways={num_pathways} > nombre de E_alpha_beta > 0 ({candidate_pathways.size})")
-    chosen = np.random.choice(candidate_pathways, size=num_pathways, replace=False)
-    P_mat.flat[chosen] = 1
-
-    return normalize(P_mat, axis=1, norm='l1')
 
 def construct_gamma_invader(P_mat_inv, E_mat, gamma, g_coef, g_exp, g_num, g_func):
     """
@@ -235,13 +249,12 @@ def invasion(B_ivec, S_alpha_vec, P_tensor, P_mat_inv, E_mat, E_conversion_const
                                                     K=K)
 
     for i in range(len(P_tensor)):
-                if B_ivec[i] > 0 and np.array_equal(P_tensor[i], P_mat_inv):
-                    B_ivec[i] += 1e-4*np.sum(B_ivec)
-                    print("Identical invader")
-                    return B_ivec, P_tensor
+        if B_ivec[i] > 0 and np.array_equal(P_tensor[i], P_mat_inv):
+            B_ivec[i] += 1e-4*np.sum(B_ivec)
+            print("Identical invader")
+            return B_ivec, P_tensor
+        
     if new_type_growth_rate > 0:
-        
-        
         B_ivec_new = np.concatenate((B_ivec, np.array([1e-4*np.sum(B_ivec)])))
         P_tensor_new = np.concatenate((P_tensor, np.array([P_mat_inv])))
         return B_ivec_new, P_tensor_new
@@ -255,11 +268,9 @@ def invasion(B_ivec, S_alpha_vec, P_tensor, P_mat_inv, E_mat, E_conversion_const
 #####################################
 
 def initialize_state (init_B, init_S, num_bact, num_resources):
-    S_alpha_vec_init = np.zeros(num_resources)
-    S_alpha_vec_init[0] = 1
 
-    return np.concatenate((np.full(shape=num_bact, fill_value=init_B), 
-                          np.full(shape=num_resources, fill_value=init_S)))
+    return np.concatenate(( init_B*np.random.rand(num_bact), 
+                          init_S*np.random.rand(num_resources)))
 
 
 def extinction(B_ivec):
@@ -290,7 +301,7 @@ def simulate_multiple_invasions(params, out_dir):
 
     #Bacteria and resources at intial state
     num_resources = params['num_resources']
-    num_bact = 1
+    num_bact = params['num_bact']
     init_B = params['init_B']
     init_S = params['init_S']
 
@@ -331,12 +342,12 @@ def simulate_multiple_invasions(params, out_dir):
     #Initialize state, vectors, matrices and tensors
     initial_state = initialize_state(init_B=init_B, init_S=init_S, num_bact=num_bact, num_resources=num_resources)
     E_mat = construct_E_mat(num_resources=num_resources, E_vec=E_vec)
-    P_tensor = construct_P_tensor_init(num_bact=num_bact, num_resources=num_resources, first_pathway_index=first_pathway_index)
+    P_tensor = construct_P_tensor(num_bact=num_bact, num_resources=num_resources, E_mat=E_mat, max_pathways=max_pathways).copy()
     gamma_ivec = construct_gamma_ivec(gamma=gamma, g_coef=g_coef, g_exp=g_exp,g_num = g_num, g_func=g_func, E_mat=E_mat, P_tensor=P_tensor)
     h_alpha_vec = construct_inflow_alpha_vec(h_0=h_0, num_resources=num_resources)
 
     #First integration until steady state 
-    B_ivec, S_alpha_vec = gut_CRM_simulator(initial_state=initial_state, 
+    B_ivec, S_alpha_vec, sol_init = gut_CRM_simulator(initial_state=initial_state, 
                             num_bact=num_bact,
                             h_alpha_vec=h_alpha_vec,
                             delta=delta,
@@ -347,8 +358,8 @@ def simulate_multiple_invasions(params, out_dir):
                             E_mat=E_mat,
                             E_conversion_constant=E_conversion_constant,
                             t_init = 0,
-                            max_time=1000)
-    
+                            max_time=10000)
+
     #Initialization of datalists
     B_list, S_list = [B_ivec.copy()], [S_alpha_vec.copy()]
     t_list = [0]
@@ -369,7 +380,7 @@ def simulate_multiple_invasions(params, out_dir):
         state = np.concatenate((B_ivec[N_Bbool], S_alpha_vec))
 
         #Integration of MCRM model
-        B_ivec[N_Bbool], S_alpha_vec = gut_CRM_simulator(initial_state=state, 
+        B_ivec[N_Bbool], S_alpha_vec, _ = gut_CRM_simulator(initial_state=state, 
                                                 num_bact=num_bact_alive,
                                                 h_alpha_vec=h_alpha_vec,
                                                 delta=delta,
@@ -390,7 +401,7 @@ def simulate_multiple_invasions(params, out_dir):
         #INVASION
 
         #P_matrix for the invader --> drawn pathways
-        P_mat_inv = construct_P_mat_invader(E_mat, max_pathways=max_pathways, num_resources=num_resources)
+        P_mat_inv = construct_P_mat(E_mat, max_pathways=max_pathways, num_resources=num_resources)
 
         #Tradeoff function for the invader
         gamma_inv = construct_gamma_invader(P_mat_inv=P_mat_inv, E_mat=E_mat, gamma=gamma, g_coef=g_coef, g_exp=g_exp, g_num=g_num, g_func=g_func)
@@ -432,6 +443,9 @@ def simulate_multiple_invasions(params, out_dir):
 
             last_sample = sample
 
+    B_list.append(B_ivec.copy())
+    S_list.append(S_alpha_vec.copy())
+    t_list.append(t)
     for i in range(len(B_list)):
         if len(B_list[i])<len(B_list[-1]):
             B_list[i] = np.concatenate((np.array(B_list[i]), np.array([0 for j in range(len(B_list[-1]) - len(B_list[i]))])))
@@ -444,11 +458,12 @@ def simulate_multiple_invasions(params, out_dir):
 
 
 
-    return B_array, S_array, t_array, P_tensor
+    return B_array, S_array, t_array, P_tensor.copy(), sol_init
 
 
 
 params = {
+    "num_bact": 29,
     "num_resources": 30,
     "r_max": 1e-10,
     "init_B": 1e10,
@@ -462,57 +477,69 @@ params = {
     "M_molar": 100,
     "V_colon": 0.41,
     "max_pathways": 10,
-    "ending_time": 50*12*30*24,
+    "ending_time": 100*12*30*24,
     "invasion_period": 1.5,
     "sample_freq": 7*24,
-    "seed": 22749,
-    "g_coef": 0.5,
-    "g_exp": 1,
-    "g_num" : 1,
-    "g_func": "exponential"
+    "seed": 1513552,
+    "g_coef": 6,
+    "g_exp": 1.1,
+    "g_num" : 8,
+    "g_func": "linear"
 }
 
 
 if __name__ == "__main__":
 
 
-    num_simus = 10
+    num_simus = 1
     ending_time = params['ending_time']
     g_func = params['g_func']
     g_coef = params['g_coef']
+    seed = params['seed']
+    num_bact = params['num_bact']
 
-    Seed_list = np.array([i for i in range(10000000)])
-    Seeds = np.concatenate((np.array([2791923]), np.random.choice(Seed_list, num_simus, replace=False)))
+    #Seed_list = np.array([i for i in range(10000000)])
+    #Seeds = np.concatenate((np.array([2791923]), np.random.choice(Seed_list, num_simus, replace=False)))
     
-    print(Seeds)
+    #print(Seeds)
 
-    for seed in Seeds : 
+    #for seed in Seeds : 
 
-        if seed == 2791923:
-            ending_time = 100*12*30*24
-        else:
-            ending_time = 50*12*30*24
+        #if seed == 2791923:
+            #ending_time = 100*12*30*24
+        #else:
+            #ending_time = 50*12*30*24
 
-        params['ending_time'] = ending_time
-
-        params['seed'] = int(seed)
-        out_dir = Path(f"results/{g_func}") / f"fig2B_redo_seed={seed}_time={int(ending_time/(12*30*24))}years_g_coef={g_coef}"
-        out_dir.mkdir(parents=True, exist_ok=True)
-        
-        # Écrire le fichier de paramètres
-        with open(out_dir / "params.json", "w") as f:
-            json.dump(params, f, indent=4)
-        B_array, S_array, t_array, P_tensor = simulate_multiple_invasions(params=params, out_dir=out_dir)
+    #params['seed'] = int(seed)
+    out_dir = Path(f"results/{g_func}") / f"fig2B_redo_seed={seed}_time={int(ending_time/(12*30*24))}years_g_coef={g_coef}_num_bact={num_bact}"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Écrire le fichier de paramètres
+    with open(out_dir / "params.json", "w") as f:
+        json.dump(params, f, indent=4)
+    B_array, S_array, t_array, P_tensor, sol_init = simulate_multiple_invasions(params=params, out_dir=out_dir)
 
 
-        fig, ax = plt.subplots(figsize=(10, 6))
-        ax.plot(t_array, B_array, lw=1)
+    plt.figure(figsize=(12, 4))
 
-        ax.set_xlabel("Time (h)")
-        ax.set_ylabel("Biomass")
-        ax.set_title(f"Biomass of bacteria in function of time seed = {seed}")
-        plt.tight_layout()
-        plt.savefig(out_dir/"plot_biomass.pdf")
+    plt.subplot(1, 2, 1)
+    plt.plot(t_array, B_array, lw=1)
+    plt.xlabel("Time (h)")
+    plt.ylabel("Biomass")
+    plt.title(f"Biomass of bacteria in function of time seed = {seed}")
+    plt.tight_layout()
+    #plt.savefig(out_dir/"plot_biomass.pdf")
+
+    #fig, ax = plt.subplots(figsize=(10, 6))
+    plt.subplot(1, 2, 2)
+    plt.plot(sol_init.t, sol_init.y[:num_bact].T)
+
+    plt.xlabel("Time")
+    plt.ylabel("Biomass")
+    plt.title(f"Initial system")
+    plt.tight_layout()
+
+    plt.savefig(out_dir/"plot_biomass.pdf")
 
 
 

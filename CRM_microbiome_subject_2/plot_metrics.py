@@ -84,7 +84,39 @@ def calculate_rescaled_log_average_abundance(B_array):
         
 
     return log_average_abundance
-    
+
+
+def cross_feeding(B_t, S_t, P_tensor, i, j, r_max, K):
+    S_log = (S_t / (K * np.ones_like(S_t) + S_t))
+    return r_max**2 * B_t[i] * B_t[j] * np.sum((S_log @ np.ones_like(S_t).T) * (np.ones_like(S_t) @ S_log.T) * (P_tensor[i] @ P_tensor[j]), axis=(0, 1))
+
+def competition(B_t, S_t, P_tensor, i, j, r_max, K):
+    S_log = (S_t / (K * np.ones_like(S_t) + S_t))
+    return r_max**2 * B_t[i] * B_t[j] * np.sum((np.ones_like(S_t) @ (S_log**2).T) * (P_tensor[i].T @ P_tensor[j]), axis=(0, 1))
+
+
+def calculate_net_interactions(B_array, S_array, P_tensor):
+    r_max, K = 1e-10, 1e-4
+    Net_interactions = np.zeros(len(B_array))
+    for time_point in range(len(B_array)):
+        print(100*time_point/len(B_array), "%")
+        rho_num = 0
+        rho_denom = 0
+        B_alive = B_array[time_point][B_array[time_point] > 0]
+        P_alive = P_tensor[B_array[time_point] > 0]
+        print(len(B_alive), len(P_alive))
+        for i in range(len(B_alive)):
+            print(i)
+            for j in range(len(B_alive)):
+                if i != j:
+                    c_ij_plus = cross_feeding(B_alive, S_array[time_point], P_alive, i, j, r_max, K)
+                    c_ij_minus = competition(B_alive, S_array[time_point], P_alive, i, j, r_max, K)
+                    rho_num += c_ij_plus - c_ij_minus
+                    rho_denom += c_ij_plus + c_ij_minus
+        Net_interactions.append(rho_num/rho_denom)
+
+    return Net_interactions
+
 
 out_dirs =[ Path("results/linear/fig2B_redo_seed=1513552_time=100years_g_coef=6"), Path("results/linear/fig2B_redo_seed=511601_time=50years_g_coef=6"),
            Path("results/linear/fig2B_redo_seed=2425818_time=50years_g_coef=6"), Path("results/linear/fig2B_redo_seed=3540053_time=50years_g_coef=6"),
@@ -297,7 +329,21 @@ def plot_density_probability_metric(Dir, metric):
 
 
 
-plot_types = ["num_enzymes", "shannon_index", "num_substances" ]
+def plot_net_interactions(out_dir):
+
+    B_array, S_array, P_tensor, t_array = load_data(out_dir)
+    Net_interactions = calculate_net_interactions(B_array, S_array, P_tensor)
+
+    fig, ax = plt.subplots(figsize=(10, 6))
+    ax.plot(t_array, Net_interactions, color='grey')
+    ax.set_xlabel("Time")
+    ax.set_ylabel("Net_interactions")
+    ax.tick_params(axis='y', labelsize=20)  
+
+    plt.savefig(out_dir/"plot_net_interactions.pdf")
+
+
+plot_types = ["net_interactions" ]
 out_dir = Path("results/linear/fig2B_redo_seed=1513552_time=100years_g_coef=6")
 Dir = Path("results/linear")
 
@@ -314,6 +360,10 @@ if __name__ == "__main__":
     if "num_substances" in plot_types:
         print("-------- Num substances --------")
         plot_num_substances(out_dir)
+
+    if "net_interactions" in plot_types:
+        print("-------- Net interactions --------")
+        plot_net_interactions(out_dir)
 
     if "mean_variance" in plot_types:
         print("-------- Mean / Variance --------")
@@ -338,6 +388,8 @@ if __name__ == "__main__":
     if "rescaled_log_average_abundance_distribution" in plot_types:
         print("-------- Rescaled log average abundance distribution --------")
         plot_density_probability_metric(Dir, "rescaled_log_average_abundance")
+
+    
 
     else:
         raise ValueError("plot_types is empty : no metric was called")
