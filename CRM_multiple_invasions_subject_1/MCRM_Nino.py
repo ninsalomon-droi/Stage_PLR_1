@@ -4,7 +4,16 @@ import matplotlib.pyplot as plt
 import copy
 import cvxpy as cvx #solver for convex optmimization problems
 from matplotlib.ticker import FuncFormatter, MaxNLocator, MultipleLocator
+import argparse
 
+parser = argparse.ArgumentParser(description="MCRM Simualtion")
+parser.add_argument(
+    "--solver",
+    choices=["ode", "convex"],
+    default="convex",
+    help="Méthode de résolution : 'ode' (LSODA) ou 'convex' (problème convexe)",
+)
+args = parser.parse_args()
 
 params = {
     "num_invaders": 1,
@@ -70,7 +79,7 @@ def MCRM_model (t, num_species, C, m, E, K, Q, state):
 
     return np.concatenate ((dN, dR), axis=None)
 
-def MCRM_simulator(initial_state, num_species, C, m, E, K, Q, max_time=50000, steady_state_threshold=1e-12):
+def MCRM_simulator(initial_state, num_species, C, m, E, K, Q, max_time=1e3, steady_state_threshold=1e-12):
     """
        Simulates the evolution of a population of species / resources under the MCRM model
        until steady state
@@ -232,6 +241,7 @@ def update_ext_bool(original, shift, survival_threshold): #bring those shifting 
     Extbool = original_plus_shift <= survival_threshold
     return Extbool
 
+
 def plot_confusion_inset(ax, predictions, simulations, threshold, loc=(0.07, 0.60, 0.3, 0.3)):
     predictions = np.asarray(predictions)
     simulations = np.asarray(simulations)
@@ -363,7 +373,7 @@ def predict_CRM_with_LV(Cs,Es,Qs,oldNs,oldRs,ms,K,E_I, C_I, m_I, delta_m, num_it
     num_native=len(Cs)
     As=make_A(Cs,Es,Qs)
     oldXs=make_X(oldNs,oldRs)
-    rs=make_r(-ms,K)
+    rs=make_r(ms,K)
     delta_r=make_r(delta_m,np.zeros(len(Qs)))
     A_II=np.zeros((num_invaders,num_invaders))
     A_IS=np.block([[np.zeros((num_invaders,num_native)),-C_I]])
@@ -428,6 +438,121 @@ def plot_prediction_vs_sim(Predictions_I, Simulations_I,
 
     plt.savefig("pred_vs_sim_MCRM.pdf")
 
+def plot_invader_abundance_vs_fitness(Simulations_I, G_naive, G_dressed, N_extinct,
+                                      cmap='viridis',
+                                      filename="invader_abundance_vs_fitness.pdf"):
+    sim = np.asarray(Simulations_I)
+    n_ext = np.asarray(N_extinct)
+    assert len(sim) == len(n_ext) == len(G_naive) == len(G_dressed), \
+        "Les tableaux doivent avoir la même longueur"
+
+    # Tracer en dernier les points avec le plus d'extinctions
+    order = np.argsort(n_ext)
+    vmin, vmax = n_ext.min(), n_ext.max()
+
+    fig, axes = plt.subplots(1, 2, figsize=(12, 4), sharey=True)
+    sc = None
+    for ax, g, name in zip(axes, [np.asarray(G_naive), np.asarray(G_dressed)],
+                           [r"$g_I^{\rm naive}$",
+                            r"$g_I^{\rm dressed}=M_{II}^{-1}g_I^{\rm naive}$"]):
+        sc = ax.scatter(g[order], sim[order], s=8, alpha=0.7, c=n_ext[order],
+                        cmap=cmap, vmin=vmin, vmax=vmax, edgecolors='none')
+        ax.axline((0, 0), slope=1, linestyle='--', color='r')
+        ax.axvline(0, linestyle=':', color='k')
+        ax.set_xlabel(name)
+        ax.grid(alpha=0.3)
+    axes[0].set_ylabel("Abondance simulée de l'envahisseur")
+
+    cbar = fig.colorbar(sc, ax=axes, pad=0.02)
+    cbar.set_label("Nombre d'espèces éteintes")
+    if vmax - vmin <= 10:
+        cbar.set_ticks(np.arange(int(vmin), int(vmax) + 1))
+
+    plt.savefig(filename, bbox_inches='tight')
+    plt.show()
+
+def plot_time_series(system, N_threshold=1e-3, logscale=False, filename="time_series_system0.pdf"):
+    """
+    Plot the abundance of species and resources
+    before and after the invasion on the same graph, using a continuous time axis.
+    The time for the “after” phase is shifted by the duration of the “before” phase.
+    """
+    # --- Phase avant invasion ---
+    t0, N0, R0 = system["t_before"], system["traj_N_before"], system["traj_R_before"]
+    surv_before = system["N_Sbool_before"]          # surviving native species (size = initial_num_species)
+    surv_idx = np.where(surv_before)[0]             # Survivor indices in N0
+
+    # --- Phase après invasion ---
+    t_inv = t0[-1]                                  # invasion time
+    t1 = system["t_after"] + t_inv                  # time difference
+    N1, R1 = system["traj_N_after"], system["traj_R_after"]
+    n_inv = system["num_invaders"]
+    n_nat = N1.shape[0] - n_inv                     # = number of invaders after invasion
+    surv_after = N1[:, -1] > N_threshold
+
+    fig, axes = plt.subplots(1, 2, figsize=(15, 5))
+
+    # ================= Species =================
+    ax = axes[0]
+    # Extinct species before invasion: phase 1 only
+    for i in range(N0.shape[0]):
+        if not surv_before[i]:
+            ax.plot(t0, N0[i], color='lightgray', alpha=0.5, lw=1)
+
+    # Natives survivors species: continue curves for phase 1 and 2
+    for k, i in enumerate(surv_idx):
+        t_full = np.concatenate((t0, t1))
+        n_full = np.concatenate((N0[i], N1[k]))
+        alive = surv_after[k]
+        ax.plot(t_full, n_full,
+                color='dodgerblue' if alive else 'gray',
+                alpha=0.8 if alive else 0.6, lw=1)
+
+    # Invader(s): exist only after invasion
+    for j in range(n_nat, N1.shape[0]):
+        ax.plot(t1, N1[j], color='darkgreen', lw=2,
+                label='Invader(s)' if j == n_nat else None)
+
+    ax.axvline(t_inv, color='red', linestyle='--', lw=1.5, label="Invasion")
+    ax.set_title("Species abundance")
+    ax.set_ylabel("Abundance")
+
+    # ================= Resources =================
+    ax = axes[1]
+    # R1 have the same resources than R0, restricted to survivors (R_Sbool)
+    # -> draw phase 2 resources separatly with R_Sbool if available
+    R_surv_idx = system.get("R_Sbool_before", None)
+    if R_surv_idx is not None:
+        R_surv_idx = np.where(R_surv_idx)[0]
+        for i in range(R0.shape[0]):
+            if i not in R_surv_idx:
+                ax.plot(t0, R0[i], color='lightgray', alpha=0.5, lw=1)
+        for k, a in enumerate(R_surv_idx):
+            ax.plot(np.concatenate((t0, t1)),
+                    np.concatenate((R0[a], R1[k])),
+                    color='darkorange', alpha=0.7, lw=1)
+    else:
+        # Without R_Sbool : draw both phases separatly (same colors)
+        for a in range(R0.shape[0]):
+            ax.plot(t0, R0[a], color='darkorange', alpha=0.7, lw=1)
+        for a in range(R1.shape[0]):
+            ax.plot(t1, R1[a], color='darkorange', alpha=0.7, lw=1)
+
+    ax.axvline(t_inv, color='red', linestyle='--', lw=1.5, label="Invasion")
+    ax.set_title("Resources abundance")
+
+    for ax in axes:
+        ax.set_xlabel("Time")
+        ax.grid(alpha=0.3)
+        if logscale:
+            ax.set_yscale('log')
+            ax.set_ylim(bottom=1e-8)
+        ax.legend()
+
+    plt.tight_layout()
+    plt.savefig(filename)
+    #plt.show()
+
 def simulate_predict_multiple_systems(params, num_systems):
     np.random.seed(None)
 
@@ -454,7 +579,7 @@ def simulate_predict_multiple_systems(params, num_systems):
     results = []
 
     for system in range(num_systems):
-        print("System n°", system)
+        print("System", system)
 
     
 
@@ -473,9 +598,15 @@ def simulate_predict_multiple_systems(params, num_systems):
 
 
         # Simulate the initial system
-        #sol = MCRM_simulator(initial_state=initial_state,num_species=num_species,C=C,m=m,E=E,Q=Q,K=K,max_time=max_time)
-        #oldN, oldR = sol.y[:num_species].T[-1], sol.y[num_species:].T[-1]
-        oldN, oldR = find_steady_state(K, C, E, Q, m, max_iteration=1000, alpha=0.1, tol=1e-7)
+
+        # Real sim
+        if args.solver == "ode":
+            sol = MCRM_simulator(initial_state=initial_state,num_species=num_species,C=C,m=m,E=E,Q=Q,K=K,max_time=max_time)
+            oldN, oldR = sol.y[:num_species].T[-1], sol.y[num_species:].T[-1]
+
+        # Sim with convex problem
+        if args.solver == "convex":
+            oldN, oldR = find_steady_state(K, C, E, Q, m, max_iteration=1000, alpha=0.1, tol=1e-7)
 
         
         # Determine extinction thresholds
@@ -514,6 +645,19 @@ def simulate_predict_multiple_systems(params, num_systems):
         # Sample environmental perturbation
         delta_m = np.random.normal(deltam_mean, deltam_std_dev, num_species_s)
 
+        # Compute fitness
+        num_native = len(Cs)
+        A_SS = make_A(Cs, Es, Qs)
+        A_II = np.zeros((num_invaders, num_invaders))
+        A_IS = np.block([[np.zeros((num_invaders, num_native)), -C_I]])
+        A_SI = np.block([[np.zeros((num_native, num_invaders))], [E_I.T]])
+        r_I  = -m_I
+        X_S  = make_X(oldNs, oldRs)
+
+        g_naive = r_I - A_IS @ X_S  
+        M_II = A_II - A_IS @ np.linalg.solve(A_SS, A_SI)
+        g_dressed = np.linalg.solve(M_II, g_naive)
+
         # Add invaders
         new_num_species = num_species_s + num_invaders
 
@@ -527,14 +671,26 @@ def simulate_predict_multiple_systems(params, num_systems):
                                                 m_I=m_I)
 
     
+        # Real sim
+        if args.solver == "ode":
+            #new_initial_state = np.random.rand(new_num_species + num_resources_s)
+            new_initial_state = np.concatenate((oldNs, np.full(num_invaders, 1e-3), oldRs))
 
-        #new_initial_state = np.random.rand(new_num_species + num_resources_s)
-        #new_sol = MCRM_simulator(initial_state=new_initial_state,num_species=new_num_species,C=C_new,m=m_new,E=E_new,Q=Qs,K=Ks,max_time=1000)
-        #newN, newR = new_sol.y[:new_num_species].T[-1], new_sol.y[new_num_species:].T[-1]
-        newN, newR = find_steady_state(Ks, C_new, E_new, Qs, m_new, max_iteration=1000, alpha=0.1, tol=1e-7)
+            new_sol = MCRM_simulator(initial_state=new_initial_state,num_species=new_num_species,C=C_new,m=m_new,E=E_new,Q=Qs,K=Ks,max_time=1000)
+            newN, newR = new_sol.y[:new_num_species].T[-1], new_sol.y[new_num_species:].T[-1]
+
+        # Sim with convex problem
+        if args.solver == "convex":
+            newN, newR = find_steady_state(Ks, C_new, E_new, Qs, m_new, max_iteration=1000, alpha=0.1, tol=1e-7)
 
         N_simulator_Sbool = [(x > N_threshold) for x in newN]
         R_simulator_Sbool = [(x > R_threshold) for x in newR]
+
+        n_residents = len(oldNs)
+        N_extinct = int(np.count_nonzero(
+            (np.asarray(oldNs) > N_threshold) &
+            (np.asarray(newN)[:n_residents] <= N_threshold)
+        ))
         
 
         N_prediction,R_prediction=predict_CRM_with_LV(Cs=Cs,
@@ -554,7 +710,6 @@ def simulate_predict_multiple_systems(params, num_systems):
                                                     R_survival_threshold=R_threshold)
 
         
-
         results.append({"simulationN_after": newN,
             "simulationR_after": newR,
             "simulationN_before": oldNs,
@@ -566,7 +721,23 @@ def simulate_predict_multiple_systems(params, num_systems):
             "sim_Nbools": N_simulator_Sbool,
             "sim_Rbools": R_simulator_Sbool,
             "prediction_Nbool": N_prediction > N_threshold,
-            "prediction_Rbool": R_prediction > R_threshold})
+            "prediction_Rbool": R_prediction > R_threshold,
+            "g_naive": g_naive,
+            "g_dressed": g_dressed,
+            # For plot abund_vs_fitness
+            "N_extinct": N_extinct})
+
+        if args.solver == "ode":
+            results[-1].update({
+                "t_before": sol.t,
+                "traj_N_before": sol.y[:num_species],
+                "traj_R_before": sol.y[num_species:],
+                "N_Sbool_before": np.array(N_Sbool),
+                "t_after": new_sol.t,
+                "traj_N_after": new_sol.y[:new_num_species],
+                "traj_R_after": new_sol.y[new_num_species:],
+                "num_invaders": num_invaders,
+                "R_Sbool_before": np.array(R_Sbool)})
         
     return results
 
@@ -578,6 +749,7 @@ Predictions_R = []
 Simulations_R = []
 Simulations_I = []
 Predictions_I = []
+N_extinct_I = []
 
 # Pour la matrice de confusion (tout)
 All_Pred_N, All_Sim_N = [], []
@@ -585,14 +757,18 @@ All_Pred_R, All_Sim_R = [], []
 All_Pred_I, All_Sim_I = [], []
 
 results = simulate_predict_multiple_systems(params=params, num_systems=640)
+if args.solver == "ode":
+    plot_time_series(results[0], N_threshold=params.get('N_threshold', 1e-3))
+Abund_I, G_naive_I, G_dressed_I = [], [], []
 
 for system in results:
-    
+    # for plot sim_vs_pred
     All_Pred_I.append(system["predictionNs"][-1])
     All_Sim_I.append(system["simulationN_after"][-1])
     if (system["prediction_Nbool"][-1]) and (system["sim_Nbools"][-1]):
         Predictions_I.append(system["predictionNs"][-1])
         Simulations_I.append(system["simulationN_after"][-1])
+        N_extinct_I.append(system["N_extinct"])
 
     for i in range(len(system["prediction_Nbool"])-1):
         All_Pred_N.append(system["predictionNs"][i])
@@ -608,10 +784,16 @@ for system in results:
             Predictions_R.append(system["predictionRs"][i])
             Simulations_R.append(system["simulationR_after"][i])
 
+    # for plot sim_vs_fitness
+    Abund_I.append(system["simulationN_after"][-1])
+    G_naive_I.append(system["g_naive"][0])
+    G_dressed_I.append(system["g_dressed"][0])
+
 #print(len(Predictions_I))
 
 N_threshold = params.get('N_threshold', 1e-3)
 R_threshold = params.get('R_threshold', 1e-9)
+
 
 plot_prediction_vs_sim(Predictions_I, Simulations_I,
                        Predictions_N, Simulations_N,
@@ -620,3 +802,5 @@ plot_prediction_vs_sim(Predictions_I, Simulations_I,
                        All_I=(All_Pred_I, All_Sim_I),
                        All_N=(All_Pred_N, All_Sim_N),
                        All_R=(All_Pred_R, All_Sim_R))
+
+plot_invader_abundance_vs_fitness(Simulations_I, G_naive_I, G_dressed_I, N_extinct_I)
