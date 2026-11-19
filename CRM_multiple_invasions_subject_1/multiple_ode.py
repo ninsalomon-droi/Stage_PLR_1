@@ -1,8 +1,10 @@
 import numpy as np
 from MCRM_pack import MCRM_tools as mcrm 
 from MCRM_pack import MCRM_models as model
+from MCRM_pack import sampling_under_constraint as spl
 import argparse
 import matplotlib.pyplot as plt
+from math import *
 
 def build_parser():
     parser = argparse.ArgumentParser(
@@ -59,15 +61,25 @@ def generate_model_params(num_species, num_resources, C_mean=1, C_std_dev=0.5, r
     K = np.random.normal(K_mean, K_std_dev,num_resources)
     return C, m, E, K, Q
 
-def sample_pos_fitness_invader(num_invaders, num_resources, C_mean, C_std_dev, rho, Q_mean, Q_std_dev, Q_rho, m_mean, m_std_dev, K_mean, K_std_dev, oldRs):
+# à généraliser pour E_I diff de C_I
+def sample_pos_fitness_invader(num_invaders, num_resources, C_mean, C_std_dev, m_mean, m_std_dev, oldRs):
     continue_sampling = True
+    mask = oldRs > 0
+    R_act = oldRs[mask]
     print("Search an invader")
     while continue_sampling:
-        C_I, m_I, E_I, _, _ = generate_model_params(num_invaders, num_resources, C_mean, C_std_dev, rho, Q_mean, Q_std_dev, Q_rho, m_mean, m_std_dev,K_mean, K_std_dev) # order check
+        #C_I, m_I, E_I, _, _ = generate_model_params(num_invaders, num_resources, C_mean, C_std_dev, rho, Q_mean, Q_std_dev, Q_rho, m_mean, m_std_dev,K_mean, K_std_dev) # order check
+        C_I = np.random.normal(C_mean / num_resources, C_std_dev / sqrt(num_resources), size=num_resources)
+        m_I = np.random.normal(m_mean, m_std_dev,num_invaders)
+        w = (C_std_dev / sqrt(num_resources)) * R_act
+        c = m_I - sum((C_mean / num_resources) * R_act)
+        Z = spl.algorithm_2_for_biggest(w, c)
+        C_I[mask] = (C_std_dev / sqrt(num_resources) * Z) + (C_mean / num_resources)
         if C_I @ oldRs - m_I > 0:
             continue_sampling = False
     print("Invader found")
-    return C_I, m_I, E_I
+    C_I = C_I.reshape(num_invaders, -1)
+    return C_I, m_I, C_I
 
 def survivors_parameters(N_Sbool, R_Sbool, params_N, params_R, params_N_and_R):
     if not isinstance(params_N, tuple) or not isinstance(params_R, tuple) or not isinstance(params_N_and_R, tuple):
@@ -100,8 +112,8 @@ def multiples_invasions(n_sys, n_spe, n_res, n_invasions, n_invaders, N_threshol
             (ms, oldNs), (Ks, oldRs), (Cs, Es) = survivors_parameters(N_Sbool, R_Sbool, (m, oldN), (K, oldR), (C, E))
             Qs = Q[R_Sbool][:, R_Sbool]
 
-            # add invader - fonctionnaliser
-            C_I, m_I, E_I = sample_pos_fitness_invader(n_invaders, n_res_s, C_mean, C_std_dev, rho, Q_mean, Q_std_dev, Q_rho, m_mean, m_std_dev,K_mean, K_std_dev, oldRs)
+            # (num_invaders, num_resources, C_mean, C_std_dev, m_mean, m_std_dev, oldRs)
+            C_I, m_I, E_I = sample_pos_fitness_invader(n_invaders, n_res_s, C_mean, C_std_dev, m_mean, m_std_dev, oldRs)
             delta_m = np.random.normal(deltam_mean, deltam_std_dev, n_spe_s)
             new_n_spe = n_spe_s + n_invaders
             C_new, E_new, m_new = mcrm.consumer_invasion(Cs,Es,C_I,E_I,ms + delta_m,m_I)
